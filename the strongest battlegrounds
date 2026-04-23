@@ -1,0 +1,202 @@
+-- CLEAN UP OLD SCRIPT
+if _G.SpeedScript then
+	for _,v in pairs(_G.SpeedScript.Connections) do
+		pcall(function() v:Disconnect() end)
+	end
+	_G.SpeedScript.Running = false
+end
+
+_G.SpeedScript = {
+	Running = true,
+	Connections = {}
+}
+
+local ScriptState = _G.SpeedScript
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-----------------------
+-- ADJUSTABLE SETTINGS
+-----------------------
+
+local TARGET_SPEED = 48
+local BOOST_SPEED = 100
+local RAGDOLL_SPEED = 100
+
+local BOOST_BUTTON = Enum.KeyCode.ButtonX
+local TELEPORT_BUTTON = Enum.KeyCode.ButtonA
+
+local TELEPORT_UP = -250
+local TELEPORT_RIGHT = 0
+
+local TELEPORT_PRESS_COUNT = 2
+local TELEPORT_TIME_WINDOW = 1
+local RETURN_DELAY = 0.3
+
+-- NEW B TELEPORT SETTINGS
+local B_TELEPORT_BUTTON = Enum.KeyCode.ButtonB
+local B_PRESS_COUNT = 2
+local B_TIME_WINDOW = 0.2
+local B_TARGET_POSITION = Vector3.new(400,710,400)
+
+-----------------------
+
+local holdingBoost = false
+local pressCount = 0
+local firstPressTime = 0
+
+-- B TELEPORT TRACKING
+local bPressCount = 0
+local bFirstPressTime = 0
+
+-----------------------
+-- INPUT HANDLING
+-----------------------
+table.insert(ScriptState.Connections,
+UserInputService.InputBegan:Connect(function(input)
+
+	if not ScriptState.Running then return end
+	if input.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
+
+	if input.KeyCode == BOOST_BUTTON then
+		holdingBoost = true
+	end
+
+	-- EXISTING TELEPORT (A)
+	if input.KeyCode == TELEPORT_BUTTON then
+		local now = tick()
+		if now - firstPressTime > TELEPORT_TIME_WINDOW then
+			firstPressTime = now
+			pressCount = 0
+		end
+		pressCount += 1
+
+		if pressCount >= TELEPORT_PRESS_COUNT then
+			pressCount = 0
+			local character = LocalPlayer.Character
+			if character then
+				local root = character:FindFirstChild("HumanoidRootPart")
+				if root then
+					local original = root.CFrame
+					root.CFrame = root.CFrame + Vector3.new(TELEPORT_RIGHT, TELEPORT_UP, 0)
+					root.AssemblyLinearVelocity = Vector3.zero
+					root.AssemblyAngularVelocity = Vector3.zero
+					task.delay(RETURN_DELAY,function()
+						if ScriptState.Running and root.Parent then
+							root.CFrame = original
+							root.AssemblyLinearVelocity = Vector3.zero
+							root.AssemblyAngularVelocity = Vector3.zero
+						end
+					end)
+				end
+			end
+		end
+	end
+
+	-- NEW B TELEPORT
+	if input.KeyCode == B_TELEPORT_BUTTON then
+		local now = tick()
+		if now - bFirstPressTime > B_TIME_WINDOW then
+			bFirstPressTime = now
+			bPressCount = 0
+		end
+		bPressCount += 1
+
+		if bPressCount >= B_PRESS_COUNT then
+			bPressCount = 0
+			local character = LocalPlayer.Character
+			if character then
+				local root = character:FindFirstChild("HumanoidRootPart")
+				if root then
+					root.CFrame = CFrame.new(B_TARGET_POSITION)
+					root.AssemblyLinearVelocity = Vector3.zero
+					root.AssemblyAngularVelocity = Vector3.zero
+				end
+			end
+		end
+	end
+
+end))
+
+table.insert(ScriptState.Connections,
+UserInputService.InputEnded:Connect(function(input)
+	if not ScriptState.Running then return end
+	if input.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
+	if input.KeyCode == BOOST_BUTTON then
+		holdingBoost = false
+	end
+end))
+
+-----------------------
+-- ENFORCE CHARACTER
+-----------------------
+local function enforce(character)
+	local humanoid = character:WaitForChild("Humanoid")
+	local root = character:WaitForChild("HumanoidRootPart")
+
+	-- Force WalkSpeed
+	humanoid.WalkSpeed = TARGET_SPEED
+
+	table.insert(ScriptState.Connections,
+	humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+		if not ScriptState.Running then return end
+		if holdingBoost then
+			humanoid.WalkSpeed = BOOST_SPEED
+		else
+			humanoid.WalkSpeed = TARGET_SPEED
+		end
+	end))
+
+	-- Free movement & turning enforcement
+	task.spawn(function()
+		while ScriptState.Running and humanoid.Health > 0 do
+			RunService.Heartbeat:Wait()
+
+			-- Always allow rotation & movement
+			humanoid.AutoRotate = true
+			humanoid.PlatformStand = false
+		end
+	end)
+
+	-- Ragdoll boost
+	task.spawn(function()
+		while ScriptState.Running and humanoid.Health > 0 do
+			task.wait(0.03)
+
+			local state = humanoid:GetState()
+			local ragdoll =
+				state == Enum.HumanoidStateType.Ragdoll
+				or state == Enum.HumanoidStateType.Physics
+				or state == Enum.HumanoidStateType.FallingDown
+				or state == Enum.HumanoidStateType.GettingUp
+
+			if ragdoll then
+				local moveDir = humanoid.MoveDirection
+				if moveDir.Magnitude > 0 then
+					root.AssemblyLinearVelocity = Vector3.new(
+						moveDir.X * RAGDOLL_SPEED,
+						root.AssemblyLinearVelocity.Y,
+						moveDir.Z * RAGDOLL_SPEED
+					)
+				end
+			end
+		end
+	end)
+end
+
+local function onCharacter(character)
+	if ScriptState.Running then
+		enforce(character)
+	end
+end
+
+if LocalPlayer.Character then
+	onCharacter(LocalPlayer.Character)
+end
+
+table.insert(ScriptState.Connections,
+LocalPlayer.CharacterAdded:Connect(onCharacter))
